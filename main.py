@@ -38,8 +38,8 @@ def _get_done_status():
 _conversation = []
 
 
-def _collect_response(token: str):
-    """Callback that streams to overlay and accumulates the full response."""
+def _stream_to_overlay(token: str):
+    """Accumulate a token and forward it to the overlay UI."""
     _response_parts.append(token)
     app.stream_token(token)
 
@@ -58,7 +58,8 @@ def on_capture():
         img_b64 = capture_screen()
         app.set_status("🤔 Asking Claude...")
         prompt = PROMPTS[PROMPT_NAMES[_prompt_idx]]
-        ask_claude(img_b64, _collect_response, prompt=prompt)
+        for token in ask_claude(img_b64, prompt=prompt):
+            _stream_to_overlay(token)
         full_reply = "".join(_response_parts)
         _conversation.append({"role": "user", "content": [{"text": "Solve this problem."}]})
         _conversation.append({"role": "assistant", "content": [{"text": full_reply}]})
@@ -81,7 +82,8 @@ def _on_clipboard_text(text: str):
     app.set_status("🤔 Asking Claude...")
     try:
         prompt = TEXT_PROMPTS[PROMPT_NAMES[_prompt_idx]]
-        ask_claude_text(text, _collect_response, prompt=prompt)
+        for token in ask_claude_text(text, prompt=prompt):
+            _stream_to_overlay(token)
         full_reply = "".join(_response_parts)
         _conversation.append({"role": "user", "content": [{"text": text}]})
         _conversation.append({"role": "assistant", "content": [{"text": full_reply}]})
@@ -125,7 +127,8 @@ def _on_followup(text: str):
         app.set_status("🤔 Asking Claude...")
         try:
             _conversation.append({"role": "user", "content": [{"text": text}]})
-            ask_claude_followup(_conversation, _collect_response)
+            for token in ask_claude_followup(_conversation):
+                _stream_to_overlay(token)
             full_reply = "".join(_response_parts)
             _conversation.append({"role": "assistant", "content": [{"text": full_reply}]})
             app.set_status(f"✅ Done  |  {_get_done_status()}")
@@ -159,7 +162,8 @@ def _on_selection_capture():
         app.set_status("🤔 Asking Claude...")
         try:
             prompt = PROMPTS[PROMPT_NAMES[_prompt_idx]]
-            ask_claude(img_b64, _collect_response, prompt=prompt)
+            for token in ask_claude(img_b64, prompt=prompt):
+                _stream_to_overlay(token)
             full_reply = "".join(_response_parts)
             _conversation.append({"role": "user", "content": [{"text": "Solve this problem."}]})
             _conversation.append({"role": "assistant", "content": [{"text": full_reply}]})

@@ -40,8 +40,14 @@ def test_connection() -> bool:
         raise RuntimeError(f"AWS SDK error: {e}") from e
 
 
-def _stream(system: list, messages: list, on_token):
-    """Send messages to Bedrock and call on_token for each streamed text chunk."""
+def _text_stream(system: list, messages: list):
+    """
+    Generator that yields text tokens from a Bedrock streaming response.
+
+    Follows the textstream pattern: callers iterate with `for token in _text_stream(...):`
+    instead of providing a callback. This makes composition, testing, and error
+    propagation cleaner — the generator raises on failure, consumers handle it.
+    """
     try:
         response = client.converse_stream(
             modelId=BEDROCK_MODEL,
@@ -54,7 +60,7 @@ def _stream(system: list, messages: list, on_token):
             if "contentBlockDelta" in event:
                 delta = event["contentBlockDelta"]["delta"]
                 if "text" in delta:
-                    on_token(delta["text"])
+                    yield delta["text"]
 
     except ClientError as e:
         error_code = e.response["Error"]["Code"]
@@ -65,17 +71,19 @@ def _stream(system: list, messages: list, on_token):
         raise RuntimeError(f"AWS SDK error: {e}") from e
 
 
-def ask_claude(image_b64: str, on_token, prompt: str = None):
+def ask_claude(image_b64: str, prompt: str = None):
     """
-    Sends base64 screenshot to Claude via AWS Bedrock and streams the response.
+    Yields text tokens from Claude's response to a screenshot.
 
     Args:
         image_b64: base64-encoded PNG string from capture.py
-        on_token: callback function called with each streamed token (str)
         prompt: optional system prompt (defaults to PROMPT from config)
+
+    Yields:
+        str: individual text tokens from the streaming response
     """
     image_bytes = base64.standard_b64decode(image_b64)
-    _stream(
+    yield from _text_stream(
         system=[{"text": prompt or PROMPT}],
         messages=[{
             "role": "user",
@@ -84,39 +92,40 @@ def ask_claude(image_b64: str, on_token, prompt: str = None):
                 {"text": "Solve this problem."},
             ],
         }],
-        on_token=on_token,
     )
 
 
-def ask_claude_followup(conversation: list, on_token):
+def ask_claude_followup(conversation: list):
     """
-    Sends multi-turn conversation to Claude via AWS Bedrock and streams the response.
+    Yields text tokens from Claude's response to a multi-turn conversation.
 
     Args:
         conversation: list of Bedrock message dicts (role + content)
-        on_token: callback function called with each streamed token (str)
+
+    Yields:
+        str: individual text tokens from the streaming response
     """
-    _stream(
+    yield from _text_stream(
         system=[{"text": FOLLOWUP_PROMPT}],
         messages=conversation,
-        on_token=on_token,
     )
 
 
-def ask_claude_text(text: str, on_token, prompt: str = None):
+def ask_claude_text(text: str, prompt: str = None):
     """
-    Sends plain text to Claude via AWS Bedrock and streams the response.
+    Yields text tokens from Claude's response to plain text input.
 
     Args:
         text: the clipboard text to analyze
-        on_token: callback function called with each streamed token (str)
         prompt: optional system prompt (defaults to TEXT_PROMPT from config)
+
+    Yields:
+        str: individual text tokens from the streaming response
     """
-    _stream(
+    yield from _text_stream(
         system=[{"text": prompt or TEXT_PROMPT}],
         messages=[{
             "role": "user",
             "content": [{"text": text}],
         }],
-        on_token=on_token,
     )
