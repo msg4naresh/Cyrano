@@ -1,0 +1,17 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Only what the tests import: the GUI/keyboard/macOS deps are not needed.
+      - run: pip install boto3==1.43.101 pytest==9.1.1
+      - run: python -m pytest -q

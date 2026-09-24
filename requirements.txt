@@ -1,5 +1,5 @@
-boto3
-mss
-pynput
-pyobjc-framework-Cocoa
-pillow
+boto3==1.43.101
+mss==10.2.0
+pynput==1.8.2
+pillow==12.3.0
+pyobjc-framework-Cocoa==12.2.2; sys_platform == "darwin"
