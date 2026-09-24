@@ -4,9 +4,9 @@ import tkinter as tk
 class OverlayWindow:
     def __init__(self):
         self.root = tk.Tk()
-        self.on_followup = None  # set by main.py
+        self.on_followup = None  # set by main.py (Assistant.followup)
         self._visible = True
-        self._current_prompt = "Interview"
+        self._current_prompt = "Coach"
         self._cursor_hidden = False
         self._min_width = 400
         self._min_height = 300
@@ -48,7 +48,7 @@ class OverlayWindow:
 
         tk.Label(
             self.drag_bar,
-            text="  🤖 Interview Assistant",
+            text="  🤖 Cyrano",
             bg="#161b22",
             fg="#58d68d",
             font=("Menlo", 11, "bold"),
@@ -235,7 +235,7 @@ class OverlayWindow:
 
     def _restore_default_status(self):
         """Restore status bar to show current prompt mode."""
-        self.status_var.set(f"[{self._current_prompt}] Ctrl+Shift+Space=screenshot  Ctrl+\\=toggle")
+        self.status_var.set(f"[{self._current_prompt}] Ctrl+Shift+Space=screenshot  Ctrl+Shift+P=mode")
 
     # ── Toggle, Move, Prompt methods ─────────────────────────────────────
 

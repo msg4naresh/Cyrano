@@ -1,13 +1,13 @@
 import base64
 import logging
-import boto3
-from botocore.config import Config
+
 from botocore.exceptions import ClientError, BotoCoreError
-from config import AWS_REGION, AWS_PROFILE, BEDROCK_MODEL, PROMPT, TEXT_PROMPT, FOLLOWUP_PROMPT
+
+from config import AWS_REGION, AWS_PROFILE, BEDROCK_MODEL, MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
-_KNOWN_PREFIXES = ("anthropic.claude", "us.anthropic.claude")
+_KNOWN_PREFIXES = ("anthropic.claude", "us.anthropic.claude", "eu.anthropic.claude", "global.anthropic.claude")
 if not BEDROCK_MODEL.startswith(_KNOWN_PREFIXES):
     logger.warning(
         "BEDROCK_MODEL '%s' does not start with a known Claude prefix (%s). "
@@ -16,107 +16,84 @@ if not BEDROCK_MODEL.startswith(_KNOWN_PREFIXES):
         ", ".join(_KNOWN_PREFIXES),
     )
 
-retry_config = Config(retries={"max_attempts": 3, "mode": "adaptive"})
-session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
-client = session.client("bedrock-runtime", config=retry_config)
+_client = None
 
 
+def get_client():
+    """Create the Bedrock client on first use, so importing this module needs no AWS credentials."""
+    global _client
+    if _client is None:
+        import boto3
+        from botocore.config import Config
+
+        session = boto3.Session(profile_name=AWS_PROFILE, region_name=AWS_REGION)
+        _client = session.client("bedrock-runtime", config=Config(retries={"max_attempts": 3, "mode": "adaptive"}))
+    return _client
+
+
+def _wrap_errors(fn):
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            logger.error("Bedrock API error [%s]: %s", error_code, e)
+            raise RuntimeError(f"Bedrock API error ({error_code}): {e}") from e
+        except BotoCoreError as e:
+            logger.error("AWS SDK error: %s", e)
+            raise RuntimeError(f"AWS SDK error: {e}") from e
+    return wrapper
+
+
+@_wrap_errors
 def test_connection() -> bool:
+    """Make a minimal API call. Returns True on success, raises RuntimeError on failure."""
+    get_client().converse(
+        modelId=BEDROCK_MODEL,
+        messages=[{"role": "user", "content": [{"text": "hi"}]}],
+        inferenceConfig={"maxTokens": 1},
+    )
+    return True
+
+
+@_wrap_errors
+def stream(system_prompt: str, messages: list, on_token) -> str:
     """
-    Test Bedrock connection by making a minimal API call.
-    Returns True if successful, raises exception on failure.
-    """
-    try:
-        response = client.converse(
-            modelId=BEDROCK_MODEL,
-            messages=[{"role": "user", "content": [{"text": "hi"}]}],
-            inferenceConfig={"maxTokens": 1},
-        )
-        return True
-    except ClientError as e:
-        error_code = e.response["Error"]["Code"]
-        raise RuntimeError(f"Bedrock connection failed ({error_code}): {e}") from e
-    except BotoCoreError as e:
-        raise RuntimeError(f"AWS SDK error: {e}") from e
-
-
-def _stream(system: list, messages: list, on_token):
-    """Send messages to Bedrock and call on_token for each streamed text chunk."""
-    try:
-        response = client.converse_stream(
-            modelId=BEDROCK_MODEL,
-            system=system,
-            messages=messages,
-            inferenceConfig={"maxTokens": 2048},
-        )
-
-        for event in response["stream"]:
-            if "contentBlockDelta" in event:
-                delta = event["contentBlockDelta"]["delta"]
-                if "text" in delta:
-                    on_token(delta["text"])
-
-    except ClientError as e:
-        error_code = e.response["Error"]["Code"]
-        logger.error("Bedrock API error [%s]: %s", error_code, e)
-        raise RuntimeError(f"Bedrock API error ({error_code}): {e}") from e
-    except BotoCoreError as e:
-        logger.error("AWS SDK error: %s", e)
-        raise RuntimeError(f"AWS SDK error: {e}") from e
-
-
-def ask_claude(image_b64: str, on_token, prompt: str = None):
-    """
-    Sends base64 screenshot to Claude via AWS Bedrock and streams the response.
+    Send a conversation to Claude and call on_token for each streamed text chunk.
 
     Args:
-        image_b64: base64-encoded PNG string from capture.py
-        on_token: callback function called with each streamed token (str)
-        prompt: optional system prompt (defaults to PROMPT from config)
+        system_prompt: the system prompt text
+        messages: list of Bedrock message dicts (role + content)
+        on_token: callback called with each streamed token (str)
+
+    Returns:
+        The full reply text.
     """
-    image_bytes = base64.standard_b64decode(image_b64)
-    _stream(
-        system=[{"text": prompt or PROMPT}],
-        messages=[{
-            "role": "user",
-            "content": [
-                {"image": {"format": "png", "source": {"bytes": image_bytes}}},
-                {"text": "Solve this problem."},
-            ],
-        }],
-        on_token=on_token,
+    response = get_client().converse_stream(
+        modelId=BEDROCK_MODEL,
+        system=[{"text": system_prompt}],
+        messages=messages,
+        inferenceConfig={"maxTokens": MAX_TOKENS},
     )
+    parts = []
+    for event in response["stream"]:
+        delta = event.get("contentBlockDelta", {}).get("delta", {})
+        if "text" in delta:
+            parts.append(delta["text"])
+            on_token(delta["text"])
+    return "".join(parts)
 
 
-def ask_claude_followup(conversation: list, on_token):
-    """
-    Sends multi-turn conversation to Claude via AWS Bedrock and streams the response.
-
-    Args:
-        conversation: list of Bedrock message dicts (role + content)
-        on_token: callback function called with each streamed token (str)
-    """
-    _stream(
-        system=[{"text": FOLLOWUP_PROMPT}],
-        messages=conversation,
-        on_token=on_token,
-    )
+def image_message(image_b64: str, text: str = "Here is the problem.") -> dict:
+    """User message holding a base64 PNG screenshot plus a short instruction."""
+    return {
+        "role": "user",
+        "content": [
+            {"image": {"format": "png", "source": {"bytes": base64.standard_b64decode(image_b64)}}},
+            {"text": text},
+        ],
+    }
 
 
-def ask_claude_text(text: str, on_token, prompt: str = None):
-    """
-    Sends plain text to Claude via AWS Bedrock and streams the response.
-
-    Args:
-        text: the clipboard text to analyze
-        on_token: callback function called with each streamed token (str)
-        prompt: optional system prompt (defaults to TEXT_PROMPT from config)
-    """
-    _stream(
-        system=[{"text": prompt or TEXT_PROMPT}],
-        messages=[{
-            "role": "user",
-            "content": [{"text": text}],
-        }],
-        on_token=on_token,
-    )
+def text_message(text: str, role: str = "user") -> dict:
+    return {"role": role, "content": [{"text": text}]}
